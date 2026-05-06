@@ -254,16 +254,19 @@ export class ChatView extends LitElement {
     this._showScrollBtn = false;
     this._isPulling = false;
     this.loading = false;
+    this._userScrolledUp = false;
+    this._initialLoadDone = false;
   }
 
   firstUpdated() {
     const el = this.shadowRoot.querySelector('.messages');
     setTimeout(() => this.scrollToBottom(false), 50);
-    setTimeout(() => this.scrollToBottom(false), 300);
 
     el.addEventListener('scroll', () => {
+      if (this._isAutoScrolling) return;
       const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
       this._showScrollBtn = distFromBottom > 300;
+      this._userScrolledUp = distFromBottom > 50;
     }, { passive: true });
 
     el.addEventListener('touchstart', (e) => {
@@ -297,17 +300,20 @@ export class ChatView extends LitElement {
   updated(changed) {
     if (changed.has('messages')) {
       const oldMessages = changed.get('messages') || [];
-      // Only auto-scroll if user is near bottom — don't fight manual scroll-up
-      if ((this.messages.length > oldMessages.length || this.streaming) && !this._showScrollBtn) {
+      if ((this.messages.length > oldMessages.length || this.streaming) && !this._userScrolledUp) {
         this.scrollToBottom(false);
       }
     }
     if ((changed.has('thinking') && this.thinking) || (changed.has('streaming') && this.streaming)) {
-      if (!this._showScrollBtn) this.scrollToBottom(false);
+      if (!this._userScrolledUp) this.scrollToBottom(false);
     }
-    // Scroll when loading finishes (skeletons removed, real messages now sole content)
     if (changed.has('loading') && !this.loading) {
-      this.scrollToBottom(false);
+      if (!this._initialLoadDone) {
+        this._initialLoadDone = true;
+        requestAnimationFrame(() => this.scrollToBottom(false));
+      } else if (!this._userScrolledUp) {
+        this.scrollToBottom(false);
+      }
     }
   }
 
@@ -315,7 +321,7 @@ export class ChatView extends LitElement {
     const el = this.shadowRoot.querySelector('.messages');
     if (el) {
       this._isAutoScrolling = true;
-      this._showScrollBtn = false; // Reflect scroll state immediately so updated() guard stays accurate
+      this._showScrollBtn = false;
       if (smooth) {
         el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
       } else {
@@ -327,6 +333,7 @@ export class ChatView extends LitElement {
 
   _restoreAndScrollToBottom() {
     this._isAutoScrolling = true;
+    this._userScrolledUp = false;
     const el = this.shadowRoot.querySelector('.messages');
     if (el) {
       el.scrollTop = el.scrollHeight;
@@ -341,6 +348,7 @@ export class ChatView extends LitElement {
     const text = input.value.trim();
     if (!text) return;
     hapticMedium();
+    this._userScrolledUp = false;
     this.dispatchEvent(new CustomEvent('send-message', { detail: { text }, bubbles: true, composed: true }));
     input.value = '';
     setTimeout(() => this.scrollToBottom(true), 100);
