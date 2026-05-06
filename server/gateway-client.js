@@ -84,6 +84,7 @@ export default class GatewayClient extends EventEmitter {
             mode: 'backend',
           },
           auth: { password: config.gatewayPassword },
+          scopes: ['operator.write', 'operator.admin', 'operator.approvals'],
         },
       }));
       return;
