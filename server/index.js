@@ -48,27 +48,32 @@ function apiRoutes(router) {
     res.json({ publicKey: pushManager.getPublicKey() });
   });
 
-  // Proxy balance fetch — reads Moonshot API key from openclaw.json
   router.get('/api/balance', async (req, res) => {
     let apiKey = null;
     try {
       const oc = JSON.parse(fs.readFileSync(path.join(config.openclawDir, 'openclaw.json'), 'utf-8'));
-      apiKey = oc?.models?.providers?.moonshot?.apiKey || null;
+      apiKey = oc?.models?.providers?.openrouter?.apiKey || null;
     } catch {}
     if (!apiKey) {
-      return res.status(503).json({ error: 'Moonshot API key not configured' });
+      return res.status(503).json({ error: 'OpenRouter API key not configured' });
     }
     try {
-      const response = await fetch('https://api.moonshot.ai/v1/users/me/balance', {
+      const response = await fetch('https://openrouter.ai/api/v1/credits', {
         headers: { 'Authorization': `Bearer ${apiKey}` }
       });
       if (!response.ok) {
         return res.status(response.status).json({ error: 'Upstream API error' });
       }
       const data = await response.json();
-      // Moonshot: {"code":0,"data":{"available_balance":22.96,"voucher_balance":0,"cash_balance":22.96}}
-      const balance = data?.data?.available_balance ?? null;
-      res.json({ balance });
+      const d = data?.data || {};
+      const totalCredits = d.total_credits ?? 0;
+      const totalUsage = d.total_usage ?? 0;
+      res.json({
+        provider: 'openrouter',
+        balance: Math.max(0, totalCredits - totalUsage),
+        totalCredits,
+        totalUsage,
+      });
     } catch (err) {
       console.error('[API] Balance fetch failed:', err.message);
       res.status(500).json({ error: 'Failed to fetch balance' });

@@ -64,11 +64,12 @@ export class ChatView extends LitElement {
     .balance-box {
       flex-shrink: 0;
       font-family: var(--f-mono);
-      font-size: 18px;
+      font-size: 15px;
       letter-spacing: 0.5px;
-      color: rgba(0, 255, 255, 0.65);
+      color: rgba(0, 255, 255, 0.75);
       white-space: nowrap;
       padding-right: 6px;
+      font-weight: 600;
     }
 
 
@@ -404,7 +405,7 @@ export class ChatView extends LitElement {
       <div class="input-area-container">
         <form class="input-area" @submit=${this._send}>
           <input type="text" placeholder="ENTER COMMAND..." autocomplete="off">
-          ${this.balance !== null && this.balance !== undefined ? html`
+          ${this.balance != null ? html`
             <div class="balance-box">$${this.balance.toFixed(2)}</div>
           ` : ''}
         </form>

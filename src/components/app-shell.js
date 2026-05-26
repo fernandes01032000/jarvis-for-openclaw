@@ -329,6 +329,7 @@ export class AppShell extends LitElement {
     this._wheelTimeout = null;
     this._isNavigating = false;
     this._balance = null;
+    this._balanceInterval = null;
     this._wheelLatched = false;
     this._notification = { visible: false, message: '', type: 'success' };
     this._pendingApproval = null;
@@ -376,7 +377,8 @@ export class AppShell extends LitElement {
     this.addEventListener('message-seen', this._onMessageSeen);
     this.addEventListener('approval-response', this._onApprovalResponse);
 
-    // Clear badge and notifications when app is focused or becomes visible
+    this._balanceInterval = setInterval(() => this._fetchBalance(), 30_000);
+
     window.addEventListener('focus', () => this._clearBadgeAndNotifications());
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') {
@@ -1051,15 +1053,14 @@ export class AppShell extends LitElement {
     addMessage(userMsg).catch(err => console.error('Failed to store message:', err));
     if (sendFailed) hapticError();
     else hapticMedium();
+    setTimeout(() => this._fetchBalance(), 3000);
   }
 
   async _fetchBalance() {
-    // NOTE: Balance fetch requires MOONSHOT_API_KEY environment variable
-    // This is fetched via the relay server to keep API keys secure
     try {
       const res = await fetch('/pwa/api/balance');
       const data = await res.json();
-      if (data?.balance !== undefined) {
+      if (data?.provider === 'openrouter' && data.balance != null) {
         this._balance = data.balance;
       }
     } catch (err) {
