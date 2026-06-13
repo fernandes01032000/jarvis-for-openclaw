@@ -114,8 +114,11 @@ export class WSClient extends EventTarget {
       this.dispatchEvent(new CustomEvent('disconnected'));
 
       if (this.shouldReconnect) {
-        console.log(`[WS] Reconnecting in ${this.reconnectDelay}ms...`);
-        setTimeout(() => this._connect(), this.reconnectDelay);
+        // Full-jitter exponential backoff: spreads reconnects so many tabs/
+        // devices dropping at once don't hammer the relay in lockstep.
+        const jittered = Math.round(Math.random() * this.reconnectDelay);
+        console.log(`[WS] Reconnecting in ${jittered}ms (cap ${this.reconnectDelay}ms)...`);
+        setTimeout(() => this._connect(), jittered);
         this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.maxReconnectDelay);
       }
     };

@@ -379,15 +379,35 @@ export class AppShell extends LitElement {
 
     this._balanceInterval = setInterval(() => this._fetchBalance(), 30_000);
 
-    window.addEventListener('focus', () => this._clearBadgeAndNotifications());
-    document.addEventListener('visibilitychange', () => {
+    // Named handlers so disconnectedCallback can remove them (anonymous
+    // arrows here used to leak on the document/window for the page lifetime).
+    this._onWindowFocus = () => this._clearBadgeAndNotifications();
+    this._onVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         this._clearBadgeAndNotifications();
       } else {
         wsClient.sendVisibility(false);
       }
-    });
+    };
+    window.addEventListener('focus', this._onWindowFocus);
+    document.addEventListener('visibilitychange', this._onVisibilityChange);
     this._clearBadgeAndNotifications();
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    clearInterval(this._balanceInterval);
+    this.removeEventListener('navigate', this._onNavigate);
+    this.removeEventListener('send-message', this._onSendMessage);
+    this.removeEventListener('refresh', this._onRefresh);
+    this.removeEventListener('delete-message', this._onDeleteMessage);
+    this.removeEventListener('clear-category', this._onClearCategory);
+    this.removeEventListener('login', this._onLogin);
+    this.removeEventListener('logout', this._onLogout);
+    this.removeEventListener('message-seen', this._onMessageSeen);
+    this.removeEventListener('approval-response', this._onApprovalResponse);
+    if (this._onWindowFocus) window.removeEventListener('focus', this._onWindowFocus);
+    if (this._onVisibilityChange) document.removeEventListener('visibilitychange', this._onVisibilityChange);
   }
 
   _runSplash() {

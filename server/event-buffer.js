@@ -86,6 +86,25 @@ export default class EventBuffer {
       data.count += eventCount;
     }
     this.clientReplayCounts.set(clientId, data);
+    this._pruneReplayCounts(now);
+  }
+
+  // clientReplayCounts is keyed by per-connection clientId, so it grows
+  // unbounded as the PWA reconnects over days (the relay can run for weeks).
+  // Drop entries whose rate-limit window has lapsed, with a hard size cap as
+  // a backstop. Prevents a slow memory creep on a long-lived relay process.
+  _pruneReplayCounts(now = Date.now()) {
+    for (const [id, d] of this.clientReplayCounts) {
+      if (now - d.windowStart > config.rateLimitWindowMs) this.clientReplayCounts.delete(id);
+    }
+    const CAP = 500;
+    if (this.clientReplayCounts.size > CAP) {
+      let excess = this.clientReplayCounts.size - CAP;
+      for (const id of this.clientReplayCounts.keys()) {
+        if (excess-- <= 0) break;
+        this.clientReplayCounts.delete(id);
+      }
+    }
   }
 
   clear() {

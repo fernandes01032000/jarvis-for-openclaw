@@ -338,6 +338,17 @@ export class MessageItem extends LitElement {
     }
   }
 
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    // Normally torn down in _markAsSeen(); this covers the element leaving the
+    // DOM (navigation / chat clear) before it's ever seen, which would
+    // otherwise leak one IntersectionObserver per unseen message.
+    if (this._observer) {
+      this._observer.disconnect();
+      this._observer = null;
+    }
+  }
+
   _setupObserver() {
     this._observer = new IntersectionObserver((entries) => {
       if (entries[0].isIntersecting) {

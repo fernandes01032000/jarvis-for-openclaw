@@ -38,9 +38,29 @@ const app = express();
 // client spoof X-Forwarded-For).
 app.set('trust proxy', 1);
 
-// Security headers (CSP off — SPA assets are same-origin and the built
-// index.html may use inline bootstrap that would be blocked otherwise)
-app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
+// Security headers. CSP is ENFORCED: the built index.html has no inline
+// <script> (entry is an external ES module), only an inline <style> block and
+// Google Fonts — hence 'unsafe-inline' for style + the fonts hosts. Same-origin
+// wss/API/manifest/worker are all covered by 'self'. If a future build inlines
+// a <script>, switch script-src to a nonce/hash rather than 'unsafe-inline'.
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+      fontSrc: ["'self'", 'https://fonts.gstatic.com'],
+      imgSrc: ["'self'", 'data:'],
+      connectSrc: ["'self'"],
+      manifestSrc: ["'self'"],
+      workerSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      baseUri: ["'self'"],
+      frameAncestors: ["'self'"],
+    },
+  },
+  crossOriginEmbedderPolicy: false,
+}));
 
 app.use(express.json({ limit: '1mb' }));
 

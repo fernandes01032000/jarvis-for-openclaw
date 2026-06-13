@@ -1,6 +1,9 @@
 // Service Worker for Jarvis PWA
 
-const CACHE_NAME = 'openclaw-pwa-v221-deepseek';
+// Bump on every release so a new SW activates and serves fresh assets.
+// Keep aligned with package.json "version" (public/ isn't processed by Vite,
+// so __APP_VERSION__ can't be injected here — this must be updated by hand).
+const CACHE_NAME = 'jarvis-pwa-v4.8.12';
 const SHELL_FILES = ['/pwa/', '/pwa/index.html'];
 
 // Handle SKIP_WAITING to force immediate takeover
