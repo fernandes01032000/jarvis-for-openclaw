@@ -466,12 +466,12 @@ export class MessageItem extends LitElement {
         ${this.role === 'user' && this.status === 'sending' ? html`<div class="status-indicator status-sending">SENDING...</div>` : ''}
         ${this.role === 'user' && this.status === 'failed' ? html`<div class="status-indicator status-failed">SEND FAILED</div>` : ''}
 
-        <div class="action-menu ${this._menuOpen ? 'visible' : ''}" 
+        <div class="action-menu ${this._menuOpen ? 'visible' : ''}" role="menu"
              style="left: ${this._menuX}px; top: ${this._menuY}px;"
              @click=${(e) => e.stopPropagation()}>
-          <button class="action-btn" @click=${this._copy}>Copy</button>
-          <button class="action-btn delete" @click=${this._delete}>Delete</button>
-          <button class="action-btn" @click=${() => this._menuOpen = false}>Close</button>
+          <button class="action-btn" role="menuitem" aria-label="Copy message" @click=${this._copy}>Copy</button>
+          <button class="action-btn delete" role="menuitem" aria-label="Delete message" @click=${this._delete}>Delete</button>
+          <button class="action-btn" role="menuitem" aria-label="Close menu" @click=${() => this._menuOpen = false}>Close</button>
         </div>
       </div>
       ${this._menuOpen ? html`<div style="position:fixed; inset:0; z-index:90;" @click=${() => this._menuOpen = false}></div>` : ''}

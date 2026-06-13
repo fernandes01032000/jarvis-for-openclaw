@@ -1,4 +1,5 @@
 import { LitElement, html, css } from 'lit';
+import { repeat } from 'lit/directives/repeat.js';
 import { hapticMedium, hapticLight } from '../services/haptics.js';
 import './message-item.js';
 import './stream-indicator.js';
@@ -377,7 +378,7 @@ export class ChatView extends LitElement {
           </div>
         ` : ''}
         
-        ${this.messages.map(m => html`
+        ${repeat(this.messages, (m) => m.id || m.timestamp, (m) => html`
           <message-item
             .msgId=${m.id}
             .role=${m.role}
@@ -404,7 +405,7 @@ export class ChatView extends LitElement {
 
       <div class="input-area-container">
         <form class="input-area" @submit=${this._send}>
-          <input type="text" placeholder="ENTER COMMAND..." autocomplete="off">
+          <input type="text" placeholder="ENTER COMMAND..." autocomplete="off" aria-label="Enter command">
           ${this.balance != null ? html`
             <div class="balance-box">$${this.balance.toFixed(2)}</div>
           ` : ''}
