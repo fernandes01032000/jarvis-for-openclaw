@@ -304,6 +304,7 @@ export class AppShell extends LitElement {
     _pendingApproval: { type: Object, state: true },
     _agentStatus: { type: String, state: true },
     _splashDone: { type: Boolean, state: true },
+    _linkDown: { type: Boolean, state: true },
   };
 
   constructor() {
@@ -312,6 +313,12 @@ export class AppShell extends LitElement {
     this.loggedIn = false;
     this.connected = false;
     this.gatewayConnected = false;
+    // Debounced "link down" flag for the UI. Brief WS drops (sub-grace
+    // reconnects) must NOT flip the header/banner — otherwise the status
+    // flickers ONLINE↔CONNECTING many times per second. Starts true so a
+    // fresh, not-yet-authenticated session shows CONNECTING, not ONLINE.
+    this._linkDown = true;
+    this._linkDownTimer = null;
     this.messages = [];
     this.thinking = false;
     this.streaming = false;
@@ -397,6 +404,7 @@ export class AppShell extends LitElement {
   disconnectedCallback() {
     super.disconnectedCallback();
     clearInterval(this._balanceInterval);
+    clearTimeout(this._linkDownTimer);
     this.removeEventListener('navigate', this._onNavigate);
     this.removeEventListener('send-message', this._onSendMessage);
     this.removeEventListener('refresh', this._onRefresh);
@@ -669,6 +677,11 @@ export class AppShell extends LitElement {
   _setupWebSocket() {
     wsClient.addEventListener('authenticated', async () => {
       this.connected = true;
+      // Connection is up — cancel any pending "link down" and clear the banner
+      // immediately so the user sees ONLINE the moment we reconnect.
+      clearTimeout(this._linkDownTimer);
+      this._linkDownTimer = null;
+      this._linkDown = false;
       // Report actual visibility so server doesn't assume visible (default) and skip push notifications
       wsClient.sendVisibility(document.visibilityState === 'visible');
       await resyncPush();
@@ -685,6 +698,15 @@ export class AppShell extends LitElement {
 
     wsClient.addEventListener('disconnected', () => {
       this.connected = false;
+      // Don't surface the disconnect in the UI right away. Only show
+      // CONNECTING + the "CONNECTION LOST" banner if we stay down past the
+      // grace window — a fast reconnect leaves the header untouched.
+      if (!this._linkDownTimer && !this._linkDown) {
+        this._linkDownTimer = setTimeout(() => {
+          this._linkDownTimer = null;
+          if (!this.connected) this._linkDown = true;
+        }, 4000);
+      }
       this.streaming = false;
       this._clearThinking();
       // Remove in-flight streaming messages — final will recreate via replay
@@ -1182,14 +1204,14 @@ export class AppShell extends LitElement {
               <div class="strm-badge">
                 STRM: ${this.messages.length.toString().padStart(3, '0')}
               </div>
-              <span style="font-size: 9px; letter-spacing: 1px; color: ${!this.connected ? 'var(--c-alert)' : !this.gatewayConnected ? '#FF9900' : 'var(--c-primary)'}; opacity: 0.8;">
-                ${!this.connected ? (this.loggedIn ? 'CONNECTING' : 'OFFLINE') : !this.gatewayConnected ? 'NO GATEWAY' : 'ONLINE'}
+              <span style="font-size: 9px; letter-spacing: 1px; color: ${this._linkDown ? 'var(--c-alert)' : !this.gatewayConnected ? '#FF9900' : 'var(--c-primary)'}; opacity: 0.8;">
+                ${this._linkDown ? (this.loggedIn ? 'CONNECTING' : 'OFFLINE') : !this.gatewayConnected ? 'NO GATEWAY' : 'ONLINE'}
               </span>
-              <div class="status-dot ${!this.connected ? 'connecting' : !this.gatewayConnected ? 'connecting' : 'online'}" style="${!this.connected ? '' : !this.gatewayConnected ? 'background:#FF9900;box-shadow:0 0 8px #FF9900;' : ''}"></div>
+              <div class="status-dot ${this._linkDown ? 'connecting' : !this.gatewayConnected ? 'connecting' : 'online'}" style="${this._linkDown ? '' : !this.gatewayConnected ? 'background:#FF9900;box-shadow:0 0 8px #FF9900;' : ''}"></div>
             </div>
           </div>
 
-          ${!this.connected ? html`
+          ${this._linkDown ? html`
             <div style="background: var(--c-alert); color: #fff; font-family: var(--f-mono); font-size: 10px; padding: 4px 10px; text-align: center; letter-spacing: 2px; z-index: 100;">
               // CONNECTION LOST - ATTEMPTING RECONNECT...
             </div>
