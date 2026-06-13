@@ -58,6 +58,11 @@ export class WSClient extends EventTarget {
       try {
         const msg = JSON.parse(e.data);
 
+        // App-level keep-alive: echo the relay's ping so it sees us alive
+        // through the Cloudflare tunnel (native ping/pong frames aren't always
+        // proxied). Cheap data frame; not surfaced to the UI.
+        if (msg.type === 'ping') { this.send({ type: 'pong' }); return; }
+
         // Auth response
         if (msg.type === 'auth') {
           if (msg.ok) {

@@ -510,7 +510,12 @@ const pingInterval = setInterval(() => {
       continue;
     }
     client.ws.isAlive = false;
-    client.ws.ping();
+    client.ws.ping(); // native frame — Cloudflare's tunnel may not forward it
+    // App-level keep-alive: a JSON ping the client echoes as a normal data
+    // frame (which Cloudflare DOES forward). The echoed {type:'pong'} arrives
+    // as a message and sets isAlive=true, so an idle client behind the tunnel
+    // is no longer terminated every cycle ("dead (no pong)" reconnect storm).
+    try { client.ws.send(JSON.stringify({ type: 'ping' })); } catch {}
   }
 }, 15000);
 
