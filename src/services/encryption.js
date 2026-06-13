@@ -1,15 +1,21 @@
-// Encryption service using Web Crypto API
-// Derives an AES-GCM 256-bit key from the user password
+// AES-GCM encryption of IndexedDB messages.
+//
+// The salt + iteration count below are fixed so that:
+//   (a) the same password always derives the same key (history stays readable)
+//   (b) auth.js can derive once, persist the raw key bytes, and re-import them
+//       on next boot without keeping the password in localStorage.
 
-const SALT = new TextEncoder().encode('openclaw-jarvis-pwa-salt'); // In a multi-user app, this should be unique
+const SALT = new TextEncoder().encode('openclaw-jarvis-pwa-salt');
 const ITERATIONS = 100000;
 
 let cachedKey = null;
 
-async function getKey(password) {
-  if (cachedKey) return cachedKey;
-  if (!password) return null;
-
+/**
+ * Derive an AES-GCM 256-bit key from a password. Returns both the CryptoKey
+ * (extractable, so the raw bytes can be persisted by auth.js) and the raw
+ * bytes themselves.
+ */
+export async function deriveKeyFromPassword(password) {
   const enc = new TextEncoder();
   const keyMaterial = await crypto.subtle.importKey(
     'raw',
@@ -18,26 +24,52 @@ async function getKey(password) {
     false,
     ['deriveBits', 'deriveKey']
   );
-
-  cachedKey = await crypto.subtle.deriveKey(
-    {
-      name: 'PBKDF2',
-      salt: SALT,
-      iterations: ITERATIONS,
-      hash: 'SHA-256'
-    },
+  const key = await crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt: SALT, iterations: ITERATIONS, hash: 'SHA-256' },
     keyMaterial,
+    { name: 'AES-GCM', length: 256 },
+    true, // extractable so auth.js can stash raw bytes
+    ['encrypt', 'decrypt']
+  );
+  const rawBytes = await crypto.subtle.exportKey('raw', key);
+  cachedKey = key;
+  return { key, rawBytes };
+}
+
+/** Cache pre-exported raw key bytes (called from auth.js after login). */
+export async function cacheKeyBytes(rawBytes) {
+  cachedKey = await crypto.subtle.importKey(
+    'raw',
+    rawBytes,
     { name: 'AES-GCM', length: 256 },
     false,
     ['encrypt', 'decrypt']
   );
-
   return cachedKey;
 }
 
-export async function encrypt(text, password) {
+/** Import + cache from raw bytes (idempotent, used on cold boot). */
+export async function importCachedKey(rawBytes) {
+  if (cachedKey) return cachedKey;
+  return cacheKeyBytes(rawBytes);
+}
+
+async function resolveKey(maybeKeyOrPassword) {
+  if (cachedKey) return cachedKey;
+  if (!maybeKeyOrPassword) return null;
+  // Legacy callers may still pass a raw password; derive transparently.
+  if (typeof maybeKeyOrPassword === 'string') {
+    const { key } = await deriveKeyFromPassword(maybeKeyOrPassword);
+    return key;
+  }
+  // Already a CryptoKey
+  cachedKey = maybeKeyOrPassword;
+  return cachedKey;
+}
+
+export async function encrypt(text, keyOrPassword) {
   try {
-    const key = await getKey(password);
+    const key = await resolveKey(keyOrPassword);
     if (!key) return text;
 
     const enc = new TextEncoder();
@@ -48,11 +80,9 @@ export async function encrypt(text, password) {
       enc.encode(text)
     );
 
-    // Combine IV and encrypted data into a single base64 string
     const combined = new Uint8Array(iv.length + encrypted.byteLength);
     combined.set(iv);
     combined.set(new Uint8Array(encrypted), iv.length);
-
     return btoa(String.fromCharCode(...combined));
   } catch (err) {
     console.error('[Encryption] Failed:', err);
@@ -60,17 +90,14 @@ export async function encrypt(text, password) {
   }
 }
 
-export async function decrypt(base64Data, password) {
+export async function decrypt(base64Data, keyOrPassword) {
   try {
-    const key = await getKey(password);
+    const key = await resolveKey(keyOrPassword);
     if (!key) return base64Data;
 
     const combined = new Uint8Array(
-      atob(base64Data)
-        .split('')
-        .map(c => c.charCodeAt(0))
+      atob(base64Data).split('').map((c) => c.charCodeAt(0))
     );
-
     const iv = combined.slice(0, 12);
     const data = combined.slice(12);
 
@@ -79,10 +106,8 @@ export async function decrypt(base64Data, password) {
       key,
       data
     );
-
     return new TextDecoder().decode(decrypted);
   } catch (err) {
-    // If decryption fails, it might be plain text or a different password
     console.warn('[Encryption] Decryption failed, returning raw data');
     return base64Data;
   }

@@ -1,6 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { wsClient } from '../services/ws-client.js';
-import { getAuth, saveAuth, clearAuth } from '../services/auth.js';
+import { getAuth, saveAuth, clearAuth, migrateLegacyIfNeeded } from '../services/auth.js';
 import { registerPush, resyncPush } from '../services/push-registration.js';
 import { addMessage, getLatest, deleteMessage, markSeen, clearByCategory, clearAll, isTombstoned } from '../services/message-store.js';
 import { hapticLight, hapticMedium, hapticSuccess, hapticError } from '../services/haptics.js';
@@ -685,11 +685,15 @@ export class AppShell extends LitElement {
     });
   }
 
-  _checkLogin() {
-    const savedPassword = getAuth();
-    if (savedPassword) {
+  async _checkLogin() {
+    // Old builds stored the raw password under 'openclaw-auth'. If we find
+    // one and there's no JWT yet, swap it for a fresh JWT + derived key
+    // before booting the WS — keeps the user logged in across the upgrade.
+    await migrateLegacyIfNeeded();
+    const token = getAuth();
+    if (token) {
       this.loggedIn = true;
-      wsClient.connect(savedPassword);
+      wsClient.connect(token);
       this._loadStoredMessages();
       this._fetchBalance();
     }
@@ -985,11 +989,18 @@ export class AppShell extends LitElement {
     }
   }
 
-  _onLogin(e) {
+  async _onLogin(e) {
     const { password } = e.detail;
-    saveAuth(password);
+    try {
+      await saveAuth(password);
+    } catch (err) {
+      hapticError();
+      const loginEl = this.shadowRoot.querySelector('login-screen');
+      if (loginEl) loginEl.setError(err?.message || 'Login failed');
+      return;
+    }
     this.loggedIn = true;
-    wsClient.connect(password);
+    wsClient.connect(getAuth());
     this._loadStoredMessages();
     hapticSuccess();
   }

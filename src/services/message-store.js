@@ -1,4 +1,4 @@
-import { getAuth } from './auth.js';
+import { getEncryptionKey } from './auth.js';
 import { encrypt, decrypt } from './encryption.js';
 
 const DB_NAME = 'openclaw-pwa';
@@ -87,8 +87,8 @@ export async function addMessage(msg) {
 
   if (isDuplicate) return null;
 
-  const password = getAuth();
-  const encryptedText = await encrypt(msg.text, password);
+  const key = await getEncryptionKey();
+  const encryptedText = await encrypt(msg.text, key);
   const encryptedMsg = { ...msg, text: encryptedText, encrypted: true };
 
   return new Promise((resolve, reject) => {
@@ -100,11 +100,11 @@ export async function addMessage(msg) {
 }
 
 async function decryptMessages(messages) {
-  const password = getAuth();
+  const key = await getEncryptionKey();
   return Promise.all(messages.map(async m => {
     if (m.encrypted) {
       try {
-        return { ...m, text: await decrypt(m.text, password), encrypted: false };
+        return { ...m, text: await decrypt(m.text, key), encrypted: false };
       } catch (err) {
         console.error('Failed to decrypt message:', err);
         return { ...m, text: '[DECRYPTION FAILED]', encrypted: false };

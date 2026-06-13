@@ -20,8 +20,10 @@ export class WSClient extends EventTarget {
     console.log(`[WS] Instance sessionKey: ${this.sessionKey}`);
   }
 
-  connect(password) {
-    this.password = password;
+  // `credential` is a JWT (preferred) or a raw gateway password (legacy).
+  // It's sent verbatim to the relay; the relay accepts either form.
+  connect(credential) {
+    this.credential = credential;
     this.shouldReconnect = true;
     this._connect();
   }
@@ -41,7 +43,15 @@ export class WSClient extends EventTarget {
       console.log('[WS] Connected, authenticating...');
       this.connected = true;
       this.reconnectDelay = 1000;
-      this.ws.send(JSON.stringify({ type: 'auth', password: this.password }));
+      // A JWT looks like xxx.yyy.zzz — that's how the relay decides between
+      // the new token path and the legacy password path. Both are accepted
+      // by the server while ACCEPT_LEGACY_PASSWORD is on.
+      const cred = this.credential;
+      const looksLikeJwt = typeof cred === 'string' && cred.split('.').length === 3;
+      const payload = looksLikeJwt
+        ? { type: 'auth', token: cred }
+        : { type: 'auth', password: cred };
+      this.ws.send(JSON.stringify(payload));
     };
 
     this.ws.onmessage = (e) => {

@@ -1,6 +1,7 @@
 import express from 'express';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
+import jwt from 'jsonwebtoken';
 import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import crypto from 'crypto';
@@ -54,6 +55,44 @@ const apiLimiter = rateLimit({
 });
 app.use('/api/', apiLimiter);
 app.use('/pwa/api/', apiLimiter);
+
+// Strict limiter for login (defense vs distributed brute-force; per-IP WS
+// lockout already exists below for the WS path)
+const loginLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many login attempts' },
+});
+
+function issueJwt() {
+  return jwt.sign(
+    { sub: 'jarvis-pwa', scope: 'pwa-relay' },
+    config.jwtSecret,
+    {
+      algorithm: 'HS256',
+      expiresIn: config.jwtExpiresIn,
+      issuer: config.jwtIssuer,
+    }
+  );
+}
+
+function verifyJwt(token) {
+  return jwt.verify(token, config.jwtSecret, {
+    algorithms: ['HS256'],
+    issuer: config.jwtIssuer,
+  });
+}
+
+// Constant-time string compare to avoid timing oracles on the gateway password
+function safeEqual(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ab, bb);
+}
 
 // API routes
 function apiRoutes(router) {
@@ -160,6 +199,29 @@ function apiRoutes(router) {
     }
     pushManager.registerSubscription(clientId, subscription);
     res.json({ ok: true });
+  });
+
+  // Exchange gateway password for a short-lived JWT (used by the PWA WS auth).
+  // Falls under loginLimiter and the IP brute-force tracker.
+  router.post('/api/auth/login', loginLimiter, (req, res) => {
+    const ip = (req.headers['cf-connecting-ip'] || req.ip || '').toString();
+    if (isLockedOut(ip)) {
+      return res.status(429).json({ error: 'Too many failed attempts' });
+    }
+    const { password } = req.body || {};
+    if (!password || !safeEqual(String(password), String(config.gatewayPassword))) {
+      recordAuthFailure(ip);
+      return res.status(401).json({ error: 'Invalid password' });
+    }
+    recordAuthSuccess(ip);
+    try {
+      const token = issueJwt();
+      const decoded = jwt.decode(token);
+      return res.json({ token, expiresAt: decoded?.exp ? decoded.exp * 1000 : null });
+    } catch (err) {
+      console.error('[Auth] Failed to issue JWT:', err.message);
+      return res.status(500).json({ error: 'Failed to issue token' });
+    }
   });
 
 }
@@ -310,7 +372,10 @@ wss.on('connection', (ws, req) => {
         return;
       }
 
-      // Auth: client sends { type: "auth", password: "..." }
+      // Auth: client sends either
+      //   { type: "auth", token: "<JWT>" }   (preferred — issued by /api/auth/login)
+      // or legacy:
+      //   { type: "auth", password: "<gatewayPassword>" }
       if (msg.type === 'auth') {
         const ip = ws._remoteIp || 'unknown';
         if (isLockedOut(ip)) {
@@ -318,9 +383,28 @@ wss.on('connection', (ws, req) => {
           ws.close(4429, 'rate-limited');
           return;
         }
-        if (msg.password === config.gatewayPassword) {
+        let ok = false;
+        let via = null;
+        if (typeof msg.token === 'string') {
+          try {
+            verifyJwt(msg.token);
+            ok = true;
+            via = 'jwt';
+          } catch (err) {
+            // fall through to password fallback
+          }
+        }
+        if (!ok && config.acceptLegacyPassword && typeof msg.password === 'string'
+            && safeEqual(msg.password, String(config.gatewayPassword))) {
+          ok = true;
+          via = 'password (legacy)';
+        }
+        if (ok) {
           authenticated = true;
           recordAuthSuccess(ip);
+          if (via === 'password (legacy)') {
+            console.warn(`[WS] ${clientId} (${ip}) authenticated via legacy password — client should migrate to JWT`);
+          }
           pwaClients.set(clientId, { ws, isVisible });
           ws.send(JSON.stringify({ type: 'auth', ok: true }));
           console.log(`[WS] ${clientId} authenticated`);
