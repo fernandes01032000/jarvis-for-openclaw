@@ -156,20 +156,103 @@ app.use(spaFallback);
 const server = createServer(app);
 
 // WebSocket server
-const wss = new WebSocketServer({ 
+const wss = new WebSocketServer({
   noServer: true,
   maxPayload: 150 * 1024 * 1024 // 150MB limit
 });
 
+// --- Auth brute-force protection (per client IP) ---
+const authAttempts = new Map(); // ip -> { count, firstAt, lockedUntil }
+
+function getClientIp(req) {
+  const cf = req.headers['cf-connecting-ip'];
+  if (cf) return String(cf).split(',')[0].trim();
+  const xff = req.headers['x-forwarded-for'];
+  if (xff) return String(xff).split(',')[0].trim();
+  return req.socket?.remoteAddress || 'unknown';
+}
+
+function getAuthState(ip) {
+  const now = Date.now();
+  let s = authAttempts.get(ip);
+  if (!s) return null;
+  if (s.lockedUntil && s.lockedUntil <= now) {
+    authAttempts.delete(ip);
+    return null;
+  }
+  if (!s.lockedUntil && now - s.firstAt > config.authWindowMs) {
+    authAttempts.delete(ip);
+    return null;
+  }
+  return s;
+}
+
+function isLockedOut(ip) {
+  const s = getAuthState(ip);
+  return !!(s && s.lockedUntil && s.lockedUntil > Date.now());
+}
+
+function recordAuthFailure(ip) {
+  const now = Date.now();
+  let s = getAuthState(ip);
+  if (!s) {
+    s = { count: 0, firstAt: now, lockedUntil: 0 };
+    authAttempts.set(ip, s);
+  }
+  s.count++;
+  if (s.count >= config.authMaxAttempts) {
+    s.lockedUntil = now + config.authLockoutMs;
+    console.warn(`[WS] IP ${ip} locked out for ${config.authLockoutMs / 1000}s after ${s.count} failed auths`);
+  }
+}
+
+function recordAuthSuccess(ip) {
+  authAttempts.delete(ip);
+}
+
+// Periodically purge expired entries
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, s] of authAttempts) {
+    if (s.lockedUntil && s.lockedUntil <= now) authAttempts.delete(ip);
+    else if (!s.lockedUntil && now - s.firstAt > config.authWindowMs) authAttempts.delete(ip);
+  }
+}, 60_000).unref();
+
+function isOriginAllowed(origin) {
+  if (!origin) return config.allowNullOrigin;
+  if (origin === 'null') return config.allowNullOrigin;
+  return config.allowedOrigins.includes(origin);
+}
+
 server.on('upgrade', (req, socket, head) => {
   const pathname = new URL(req.url, 'http://localhost').pathname;
-  if (pathname === '/pwa/ws' || pathname === '/ws') {
-    wss.handleUpgrade(req, socket, head, (ws) => {
-      wss.emit('connection', ws, req);
-    });
-  } else {
+  if (pathname !== '/pwa/ws' && pathname !== '/ws') {
     socket.destroy();
+    return;
   }
+
+  const ip = getClientIp(req);
+  const origin = req.headers.origin;
+
+  if (!isOriginAllowed(origin)) {
+    console.warn(`[WS] Rejecting upgrade from ${ip}: origin=${origin || '<none>'} not allowed`);
+    socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+    socket.destroy();
+    return;
+  }
+
+  if (isLockedOut(ip)) {
+    console.warn(`[WS] Rejecting upgrade from ${ip}: locked out (auth brute-force)`);
+    socket.write('HTTP/1.1 429 Too Many Requests\r\nRetry-After: 300\r\nConnection: close\r\n\r\n');
+    socket.destroy();
+    return;
+  }
+
+  wss.handleUpgrade(req, socket, head, (ws) => {
+    ws._remoteIp = ip;
+    wss.emit('connection', ws, req);
+  });
 });
 
 wss.on('connection', (ws, req) => {
@@ -200,8 +283,15 @@ wss.on('connection', (ws, req) => {
 
       // Auth: client sends { type: "auth", password: "..." }
       if (msg.type === 'auth') {
+        const ip = ws._remoteIp || 'unknown';
+        if (isLockedOut(ip)) {
+          ws.send(JSON.stringify({ type: 'auth', ok: false, error: 'Too many attempts. Try again later.' }));
+          ws.close(4429, 'rate-limited');
+          return;
+        }
         if (msg.password === config.gatewayPassword) {
           authenticated = true;
+          recordAuthSuccess(ip);
           pwaClients.set(clientId, { ws, isVisible });
           ws.send(JSON.stringify({ type: 'auth', ok: true }));
           console.log(`[WS] ${clientId} authenticated`);
@@ -238,6 +328,8 @@ wss.on('connection', (ws, req) => {
             }
           }
         } else {
+          recordAuthFailure(ip);
+          console.warn(`[WS] ${clientId} (${ip}) auth failed`);
           ws.send(JSON.stringify({ type: 'auth', ok: false, error: 'Invalid password' }));
           ws.close();
         }

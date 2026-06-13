@@ -41,10 +41,31 @@ function loadVapidKeys() {
 
 const vapidKeys = loadVapidKeys();
 
+const DEFAULT_ALLOWED_ORIGINS = [
+  'https://jarvis.fernandes.lat',
+  'http://127.0.0.1:18800',
+  'http://localhost:18800',
+];
+
+const envOrigins = (process.env.ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
 export default {
   port: 18800,
   gatewayUrl: 'ws://127.0.0.1:18789',
   gatewayPassword: process.env.GATEWAY_PASSWORD,
+  gatewayToken: process.env.GATEWAY_TOKEN,
+
+  // WS upgrade hardening
+  allowedOrigins: envOrigins.length ? envOrigins : DEFAULT_ALLOWED_ORIGINS,
+  // Allow PWA standalone mode (often sends Origin: null)
+  allowNullOrigin: process.env.ALLOW_NULL_ORIGIN !== 'false',
+  // Auth brute-force protection (per remote IP)
+  authMaxAttempts: parseInt(process.env.AUTH_MAX_ATTEMPTS || '5', 10),
+  authWindowMs: parseInt(process.env.AUTH_WINDOW_MS || '60000', 10),
+  authLockoutMs: parseInt(process.env.AUTH_LOCKOUT_MS || '300000', 10),
 
   // Event buffer
   maxEvents: 2000,

@@ -3,6 +3,30 @@ import crypto from 'crypto';
 import { EventEmitter } from 'events';
 import config from './config.js';
 
+const SENSITIVE_KEYS = new Set(['token', 'password', 'apikey', 'secret', 'auth', 'authorization', 'privatekey']);
+
+function redact(value, depth = 0) {
+  if (value === null || value === undefined || depth > 4) return value;
+  if (Array.isArray(value)) return value.map((v) => redact(v, depth + 1));
+  if (typeof value === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) {
+      out[k] = SENSITIVE_KEYS.has(k.toLowerCase()) ? '[REDACTED]' : redact(v, depth + 1);
+    }
+    return out;
+  }
+  return value;
+}
+
+function redactJSON(obj, max = 300) {
+  try {
+    const s = JSON.stringify(redact(obj));
+    return s.length > max ? s.slice(0, max - 3) + '...' : s;
+  } catch {
+    return '[unserializable]';
+  }
+}
+
 export default class GatewayClient extends EventEmitter {
   constructor(eventBuffer) {
     super();
@@ -62,7 +86,7 @@ export default class GatewayClient extends EventEmitter {
 
   _handleMessage(msg) {
     this._lastEventAt = Date.now();
-    const preview = msg.type === 'res' && !msg.ok ? JSON.stringify(msg).substring(0, 300) : '';
+    const preview = msg.type === 'res' && !msg.ok ? redactJSON(msg, 300) : '';
     console.log(`[Gateway] Recv: type=${msg.type}, event=${msg.event || ''}, method=${msg.method || ''}, id=${msg.id || ''}, ok=${msg.ok} ${preview}`);
 
     // Handle challenge
@@ -75,15 +99,15 @@ export default class GatewayClient extends EventEmitter {
         id: this.pendingConnectId,
         method: 'connect',
         params: {
-          minProtocol: 3,
-          maxProtocol: 3,
+          minProtocol: 4,
+          maxProtocol: 4,
           client: {
             id: 'openclaw-control-ui',
             version: '1.0.0',
             platform: 'nodejs',
             mode: 'backend',
           },
-          auth: { password: config.gatewayPassword },
+          auth: { token: config.gatewayToken || config.gatewayPassword },
           scopes: ['operator.write', 'operator.admin', 'operator.approvals'],
         },
       }));
@@ -94,7 +118,7 @@ export default class GatewayClient extends EventEmitter {
     if (msg.type === 'res' && msg.id === this.pendingConnectId) {
       if (msg.ok) {
         console.log('[Gateway] Authenticated successfully!');
-        console.log('[Gateway] Auth payload:', JSON.stringify(msg.payload));
+        console.log('[Gateway] Auth payload:', redactJSON(msg.payload, 500));
         this.authenticated = true;
         this.emit('authenticated');
       } else {
@@ -129,7 +153,7 @@ export default class GatewayClient extends EventEmitter {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       const payload = typeof data === 'string' ? JSON.parse(data) : data;
       const str = JSON.stringify(payload);
-      console.log(`[Gateway] Send: ${str.substring(0, 200)}...`);
+      console.log(`[Gateway] Send: type=${payload.type || '?'} method=${payload.method || ''} id=${payload.id || ''}`);
       this.ws.send(str);
       return true;
     }
