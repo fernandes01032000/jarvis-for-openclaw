@@ -54,9 +54,20 @@ const envOrigins = (process.env.ALLOWED_ORIGINS || '')
 
 export default {
   port: 18800,
+  bindHost: process.env.BIND_HOST || '127.0.0.1',
   gatewayUrl: 'ws://127.0.0.1:18789',
   gatewayPassword: process.env.GATEWAY_PASSWORD,
   gatewayToken: process.env.GATEWAY_TOKEN,
+
+  // WS limits
+  wsMaxPayloadBytes: parseInt(process.env.WS_MAX_PAYLOAD_BYTES || String(5 * 1024 * 1024), 10),
+
+  // HTTP rate limiting (per IP)
+  httpRateLimitWindowMs: parseInt(process.env.HTTP_RATE_LIMIT_WINDOW_MS || '60000', 10),
+  httpRateLimitMax: parseInt(process.env.HTTP_RATE_LIMIT_MAX || '120', 10),
+
+  // Local health checker (off by default — Ollama not installed on VPS2)
+  localHealthEnabled: process.env.LOCAL_HEALTH_ENABLED === 'true',
 
   // WS upgrade hardening
   allowedOrigins: envOrigins.length ? envOrigins : DEFAULT_ALLOWED_ORIGINS,

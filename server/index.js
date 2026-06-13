@@ -1,4 +1,6 @@
 import express from 'express';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import { createServer } from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
 import crypto from 'crypto';
@@ -28,7 +30,30 @@ const runCompleteTimers = new Map();
 
 // Express app
 const app = express();
-app.use(express.json());
+
+// Trust exactly 1 reverse-proxy hop (Cloudflare Tunnel → relay). Using a
+// numeric hop count avoids express-rate-limit's ERR_ERL_PERMISSIVE_TRUST_PROXY
+// warning that fires when trust proxy is set to `true` (which would let any
+// client spoof X-Forwarded-For).
+app.set('trust proxy', 1);
+
+// Security headers (CSP off — SPA assets are same-origin and the built
+// index.html may use inline bootstrap that would be blocked otherwise)
+app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
+
+app.use(express.json({ limit: '1mb' }));
+
+// Rate limit /api/* and /pwa/api/* (per IP). CF Access is the primary gate;
+// this is defense-in-depth in case Access is misconfigured or bypassed.
+const apiLimiter = rateLimit({
+  windowMs: config.httpRateLimitWindowMs,
+  max: config.httpRateLimitMax,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests' },
+});
+app.use('/api/', apiLimiter);
+app.use('/pwa/api/', apiLimiter);
 
 // API routes
 function apiRoutes(router) {
@@ -50,12 +75,16 @@ function apiRoutes(router) {
 
   router.get('/api/balance', async (req, res) => {
     let apiKey = null;
+    let primaryProvider = null;
     try {
       const oc = JSON.parse(fs.readFileSync(path.join(config.openclawDir, 'openclaw.json'), 'utf-8'));
       apiKey = oc?.models?.providers?.openrouter?.apiKey || null;
+      primaryProvider = (oc?.agents?.defaults?.model?.primary || '').split('/')[0] || null;
     } catch {}
     if (!apiKey) {
-      return res.status(503).json({ error: 'OpenRouter API key not configured' });
+      // Balance lookup is OpenRouter-only. Primary provider is not OpenRouter
+      // (e.g. moonshot/kimi-k2.6), so degrade gracefully with 200 instead of 503.
+      return res.json({ provider: primaryProvider, balance: null, supported: false });
     }
     try {
       const response = await fetch('https://openrouter.ai/api/v1/credits', {
@@ -158,7 +187,7 @@ const server = createServer(app);
 // WebSocket server
 const wss = new WebSocketServer({
   noServer: true,
-  maxPayload: 150 * 1024 * 1024 // 150MB limit
+  maxPayload: config.wsMaxPayloadBytes
 });
 
 // --- Auth brute-force protection (per client IP) ---
@@ -513,8 +542,8 @@ gatewayClient.on('response', (msg) => {
 });
 
 // Start
-server.listen(config.port, () => {
-  console.log(`[Relay] Server running on port ${config.port}`);
+server.listen(config.port, config.bindHost, () => {
+  console.log(`[Relay] Server running on ${config.bindHost}:${config.port}`);
 });
 
 function broadcastGatewayStatus(connected) {
@@ -535,13 +564,17 @@ function sendGatewayStatusTo(ws) {
 }
 
 gatewayClient.connect();
-setTimeout(() => localHealth.start(), 5000); // allow gateway connection to begin
+if (config.localHealthEnabled) {
+  setTimeout(() => localHealth.start(), 5000); // allow gateway connection to begin
+} else {
+  console.log('[LocalHealth] disabled (set LOCAL_HEALTH_ENABLED=true to enable)');
+}
 
 // Graceful shutdown
 const shutdown = () => {
   console.log('[Relay] Shutting down...');
   clearInterval(pingInterval);
-  localHealth.stop();
+  if (config.localHealthEnabled) localHealth.stop();
   server.close();
   process.exit(0);
 };
